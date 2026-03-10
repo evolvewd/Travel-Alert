@@ -31,10 +31,13 @@ export default function TravelDashboard() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DisruptionData[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isInitialMount, setIsInitialMount] = useState(true);
 
   const [searchQuery, setSearchQuery] = useState('');
 
   const fetchDisruptions = async (query?: string) => {
+    if (loading) return;
+    
     setLoading(true);
     setError(null);
     try {
@@ -63,14 +66,10 @@ export default function TravelDashboard() {
         .filter(c => c.web && c.web.uri)
         .map(c => ({ title: c.web!.title || 'Fonte', uri: c.web!.uri as string }));
 
-      // Simple parsing logic to split by categories if possible, or just show as one big report
-      // For a more robust app, we'd ask for JSON, but grounding works best with text.
-      // Let's structure it into categories based on keywords.
-      
       const categories: DisruptionData[] = [
         {
           category: 'general',
-          title: 'Bollettino Viaggi Odierno',
+          title: query ? `Risultato Ricerca: ${query}` : 'Bollettino Viaggi Odierno',
           content: text,
           sources: sources,
           lastUpdated: new Date().toISOString()
@@ -79,16 +78,23 @@ export default function TravelDashboard() {
 
       setData(categories);
     } catch (err: any) {
-      console.error(err);
-      setError("Errore nel recupero delle informazioni. Riprova tra poco.");
+      console.error('Error fetching disruptions:', err);
+      if (err.message?.includes('429') || err.status === 429) {
+        setError("Quota API superata. Per favore, attendi un minuto prima di riprovare o verifica il tuo piano su Google AI Studio.");
+      } else {
+        setError("Errore nel recupero delle informazioni. Riprova tra poco.");
+      }
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDisruptions();
-  }, []);
+    if (isInitialMount) {
+      fetchDisruptions();
+      setIsInitialMount(false);
+    }
+  }, [isInitialMount]);
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-8">
