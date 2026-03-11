@@ -37,7 +37,7 @@ export default function Login({ onLogin }: LoginProps) {
           <p className="text-stone-500 mt-2">Area Riservata - Giada Moramarco</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" suppressHydrationWarning>
           <div>
             <label className="block text-xs font-mono uppercase tracking-widest text-stone-400 mb-2 ml-1">
               Inserisci Password
@@ -50,6 +50,7 @@ export default function Login({ onLogin }: LoginProps) {
                 className={`w-full px-6 py-4 bg-stone-50 border ${error ? 'border-red-500 animate-shake' : 'border-stone-200'} rounded-2xl focus:outline-none focus:ring-2 focus:ring-stone-900/10 transition-all`}
                 placeholder="••••••••"
                 autoFocus
+                suppressHydrationWarning
               />
             </div>
           </div>

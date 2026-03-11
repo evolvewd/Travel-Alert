@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { 
   Plane, 
@@ -11,7 +11,8 @@ import {
   Calendar,
   Search,
   Info,
-  Printer
+  Printer,
+  WifiOff
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { format } from 'date-fns';
@@ -31,16 +32,20 @@ export default function TravelDashboard() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DisruptionData[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [isInitialMount, setIsInitialMount] = useState(true);
+  const hasFetched = useRef(false);
 
   const [searchQuery, setSearchQuery] = useState('');
 
-  const fetchDisruptions = async (query?: string) => {
-    if (loading) return;
+  const fetchDisruptions = async (query?: string, useSearch = true) => {
+    if (loading && useSearch) return; // Only block if it's a fresh search
     
     setLoading(true);
     setError(null);
     try {
+      if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
+        throw new Error("API_KEY_MISSING");
+      }
+
       const basePrompt = `Sei un assistente specializzato per un'agenzia viaggi italiana. 
       Analizza la situazione attuale (oggi ${format(new Date(), 'dd MMMM yyyy', { locale: it })}) riguardo a:
       1. Problemi con i voli (cancellazioni, ritardi significativi, problemi aeroportuali).
@@ -50,14 +55,17 @@ export default function TravelDashboard() {
 
       const prompt = query 
         ? `${basePrompt}\n\nIn particolare, rispondi a questa richiesta specifica dell'utente: "${query}"`
-        : `${basePrompt}\n\nFornisci un riassunto dettagliato ma conciso per ogni categoria. Usa un tono professionale e utile per un agente di viaggio. Identifica chiaramente le fonti.`;
+        : `${basePrompt}\n\nFornisci un riassunto dettagliato ma conciso per ogni categoria. Usa un tono professionale e utile per un agente di viaggio.`;
+
+      const config: any = {};
+      if (useSearch) {
+        config.tools = [{ googleSearch: {} }];
+      }
 
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-        },
+        config: config,
       });
 
       const text = response.text || "Nessuna informazione disponibile.";
@@ -77,10 +85,23 @@ export default function TravelDashboard() {
       ];
 
       setData(categories);
+      if (!useSearch) {
+        setError("MODE_OFFLINE"); // Just a hint for the UI, not a fatal error
+      }
     } catch (err: any) {
       console.error('Error fetching disruptions:', err);
-      if (err.message?.includes('429') || err.status === 429) {
-        setError("Quota API superata. Per favore, attendi un minuto prima di riprovare o verifica il tuo piano su Google AI Studio.");
+      
+      // AUTO-RETRY LOGIC: If 429 happens and we were using search, try again WITHOUT search
+      if ((err.message?.includes('429') || err.status === 429) && useSearch) {
+        console.warn("Quota exceeded for search, retrying without live search...");
+        setLoading(false); // Reset loading for the retry
+        return fetchDisruptions(query, false);
+      }
+
+      if (err.message === "API_KEY_MISSING") {
+        setError("Chiave API mancante. Verifica le impostazioni su Vercel (NEXT_PUBLIC_GEMINI_API_KEY).");
+      } else if (err.message?.includes('429') || err.status === 429) {
+        setError("QUOTA_EXCEEDED");
       } else {
         setError("Errore nel recupero delle informazioni. Riprova tra poco.");
       }
@@ -90,11 +111,11 @@ export default function TravelDashboard() {
   };
 
   useEffect(() => {
-    if (isInitialMount) {
+    if (!hasFetched.current) {
       fetchDisruptions();
-      setIsInitialMount(false);
+      hasFetched.current = true;
     }
-  }, [isInitialMount]);
+  }, []);
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-8">
@@ -105,7 +126,7 @@ export default function TravelDashboard() {
             <Info size={14} />
             di Giada Moramarco &bull; Via Massa 3, Chieri
           </p>
-          <p className="text-stone-400 mt-1 flex items-center gap-2 text-xs">
+          <p className="text-stone-400 mt-1 flex items-center gap-2 text-xs" suppressHydrationWarning>
             <Calendar size={14} />
             {format(new Date(), 'EEEE dd MMMM yyyy', { locale: it })}
           </p>
@@ -141,10 +162,40 @@ export default function TravelDashboard() {
         </div>
       </header>
 
-      {error && (
-        <div className="p-4 bg-red-50 border border-red-100 text-red-700 rounded-xl flex items-center gap-3">
-          <AlertTriangle size={20} />
-          <p>{error}</p>
+      {error && error !== 'MODE_OFFLINE' && (
+        <div className={`p-4 rounded-2xl flex items-center gap-3 ${error === 'QUOTA_EXCEEDED' ? 'bg-amber-50 border border-amber-200 text-amber-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+          <AlertTriangle size={20} className="shrink-0" />
+          <div className="flex-1 text-sm">
+            {error === 'QUOTA_EXCEEDED' ? (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <span>
+                  <strong>Quota superata:</strong> Il servizio di ricerca in tempo reale è temporaneamente limitato da Google.
+                </span>
+                <button 
+                  onClick={() => fetchDisruptions(searchQuery, false)}
+                  className="px-4 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center gap-2 whitespace-nowrap"
+                >
+                  <WifiOff size={14} />
+                  Prova senza ricerca live
+                </button>
+              </div>
+            ) : error}
+          </div>
+        </div>
+      )}
+
+      {error === 'MODE_OFFLINE' && (
+        <div className="p-3 bg-stone-100 border border-stone-200 text-stone-600 rounded-xl flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2 text-xs">
+            <WifiOff size={16} />
+            <span><strong>Modalità Offline:</strong> Risultati basati su dati storici (la ricerca live è limitata).</span>
+          </div>
+          <button 
+            onClick={() => fetchDisruptions(searchQuery, true)}
+            className="text-[10px] font-mono uppercase tracking-wider bg-white px-2 py-1 rounded border border-stone-300 hover:bg-stone-50"
+          >
+            Riprova Live
+          </button>
         </div>
       )}
 
